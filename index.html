@@ -38,7 +38,7 @@
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
 
-        let jetsArray;
+        let jetsArray = [];
         let taiwanImage = new Image();
         let t20Image = new Image();
         
@@ -46,18 +46,22 @@
         let isTaiwanLoaded = false;
         let isT20Loaded = false;
 
+        // 全域變數：儲存台灣圖資目前的顯示尺寸，用於碰撞偵測
+        let taiwanBounds = { width: 0, height: 0, radiusX: 0, radiusY: 0 };
+
         // 設定圖片路徑
         taiwanImage.src = 'Taiwan.jpg';
         t20Image.src = 'T20.png';
 
         // 圖片載入成功處理
-        taiwanImage.onload = () => { isTaiwanLoaded = true; };
+        taiwanImage.onload = () => { isTaiwanLoaded = true; updateTaiwanBounds(); };
         t20Image.onload = () => { isT20Loaded = true; };
 
         // 圖片載入失敗處理 (Fallback)
         taiwanImage.onerror = () => { 
             console.log("無法載入 Taiwan.jpg，切換至雷達線框模式");
             isTaiwanLoaded = false; 
+            updateTaiwanBounds();
         };
         t20Image.onerror = () => { 
             console.log("無法載入 T20.png，切換至幾何戰機模式");
@@ -68,7 +72,7 @@
         let mouse = {
             x: null,
             y: null,
-            radius: 150
+            radius: 200 // 稍微加大感應半徑
         }
 
         window.addEventListener('mousemove', function(event) {
@@ -79,13 +83,31 @@
         window.addEventListener('resize', function() {
             canvas.width = innerWidth;
             canvas.height = innerHeight;
-            init(); // 重置畫面
+            updateTaiwanBounds(); // 重算邊界
+            // 視窗改變時不重置飛機數量，只重新調整位置(如果需要)
         });
 
         window.addEventListener('mouseout', function() {
             mouse.x = undefined;
             mouse.y = undefined;
         })
+
+        // 更新台灣圖資的邊界資訊
+        function updateTaiwanBounds() {
+            if (isTaiwanLoaded) {
+                const scale = Math.min(canvas.width / taiwanImage.width, canvas.height / taiwanImage.height) * 0.7;
+                taiwanBounds.width = taiwanImage.width * scale;
+                taiwanBounds.height = taiwanImage.height * scale;
+            } else {
+                // 線框模式下的概略大小
+                const scale = Math.min(canvas.width, canvas.height) * 0.8; 
+                taiwanBounds.width = scale * 0.5; // 粗估
+                taiwanBounds.height = scale;
+            }
+            // 設定橢圓形禁航區半徑 (稍微比圖案大一點點，作為緩衝)
+            taiwanBounds.radiusX = taiwanBounds.width / 2 + 20;
+            taiwanBounds.radiusY = taiwanBounds.height / 2 + 20;
+        }
 
         // 備用方案：如果圖片沒載入，畫線框地圖
         const taiwanPoints = [
@@ -102,12 +124,8 @@
 
             if (isTaiwanLoaded) {
                 // === 模式 A: 顯示圖片 ===
-                const scale = Math.min(canvas.width / taiwanImage.width, canvas.height / taiwanImage.height) * 0.7;
-                const imgWidth = taiwanImage.width * scale;
-                const imgHeight = taiwanImage.height * scale;
-                
                 ctx.globalAlpha = 0.5;
-                ctx.drawImage(taiwanImage, -imgWidth / 2, -imgHeight / 2, imgWidth, imgHeight);
+                ctx.drawImage(taiwanImage, -taiwanBounds.width / 2, -taiwanBounds.height / 2, taiwanBounds.width, taiwanBounds.height);
                 ctx.globalAlpha = 1.0;
             } else {
                 // === 模式 B: 顯示線框 (備用) ===
@@ -129,7 +147,7 @@
                 ctx.stroke();
             }
 
-            // 中心掃描點 (兩種模式都有)
+            // 中心掃描點
             ctx.beginPath();
             ctx.arc(0, 0, 5, 0, Math.PI*2);
             ctx.fillStyle = '#00ff00';
@@ -146,7 +164,6 @@
                 this.y = y;
                 this.directionX = directionX;
                 this.directionY = directionY;
-                // 如果是圖片模式，尺寸大一點；如果是幾何模式，尺寸小一點
                 this.baseSize = size; 
                 this.speed = Math.random() * 2 + 1;
                 this.angle = 0;
@@ -176,7 +193,7 @@
                 } else {
                     // === 模式 B: 顯示幾何戰機 (備用) ===
                     let size = this.baseSize;
-                    ctx.rotate(this.angle + Math.PI / 2); // 三角形需要轉 90 度
+                    ctx.rotate(this.angle + Math.PI / 2);
                     ctx.beginPath();
                     ctx.moveTo(0, -size * 1.5);
                     ctx.lineTo(size, size);
@@ -187,7 +204,6 @@
                     ctx.shadowBlur = 10;
                     ctx.shadowColor = '#e0e0e0';
                     ctx.fill();
-
                     // 噴射光
                     ctx.beginPath();
                     ctx.moveTo(-size/2, size);
@@ -201,49 +217,119 @@
             }
 
             update() {
+                // 1. 邊界檢查 (畫布邊緣反彈)
                 if (this.x > canvas.width + 50 || this.x < -50) this.directionX = -this.directionX;
                 if (this.y > canvas.height + 50 || this.y < -50) this.directionY = -this.directionY;
 
+                // 2. 台灣島禁航區邏輯 (排斥力場)
+                const cx = canvas.width / 2;
+                const cy = canvas.height / 2;
+                const distToCenterX = this.x - cx;
+                const distToCenterY = this.y - cy;
+                
+                // 使用橢圓方程式判斷是否進入警戒區: (x^2 / a^2) + (y^2 / b^2) <= 1
+                // 為了安全，我們檢查是否進入半徑 * 1.1 的範圍內
+                const normalizedDist = (distToCenterX * distToCenterX) / (taiwanBounds.radiusX * taiwanBounds.radiusX) + 
+                                     (distToCenterY * distToCenterY) / (taiwanBounds.radiusY * taiwanBounds.radiusY);
+                
+                // 如果 normalizedDist < 1 表示在橢圓內， < 1.2 表示在邊緣附近
+                if (normalizedDist < 1.2) {
+                    // 計算斥力方向 (從中心指向飛機)
+                    const angleFromCenter = Math.atan2(distToCenterY, distToCenterX);
+                    const repulsionForce = 0.5; // 斥力強度
+
+                    // 強制轉向遠離中心
+                    this.directionX += Math.cos(angleFromCenter) * repulsionForce;
+                    this.directionY += Math.sin(angleFromCenter) * repulsionForce;
+                }
+
+                // 3. 滑鼠互動 (攔截模式)，但如果滑鼠在台灣島上，則不進行強引導，避免飛機撞島
                 let dx = mouse.x - this.x;
                 let dy = mouse.y - this.y;
-                let distance = Math.sqrt(dx*dx + dy*dy);
+                let distanceToMouse = Math.sqrt(dx*dx + dy*dy);
                 
-                if (mouse.x !== undefined && distance < mouse.radius * 2) {
-                    const forceDirectionX = dx / distance;
-                    const forceDirectionY = dy / distance;
-                    const maxSpeed = 5;
-                    this.directionX += forceDirectionX * 0.1;
-                    this.directionY += forceDirectionY * 0.1;
+                // 檢查滑鼠是否在台灣島內
+                const mouseNormalizedDist = ((mouse.x - cx)**2) / (taiwanBounds.radiusX**2) + 
+                                          ((mouse.y - cy)**2) / (taiwanBounds.radiusY**2);
+                const isMouseSafe = mouseNormalizedDist > 1.0; // 滑鼠在島外才追蹤
+
+                if (isMouseSafe && mouse.x !== undefined && distanceToMouse < mouse.radius * 2) {
+                    const forceDirectionX = dx / distanceToMouse;
+                    const forceDirectionY = dy / distanceToMouse;
+                    const maxSpeed = 6; // 攔截時加速
+                    
+                    this.directionX += forceDirectionX * 0.15;
+                    this.directionY += forceDirectionY * 0.15;
+
+                    // 限制最大速度
                     const currentSpeed = Math.sqrt(this.directionX**2 + this.directionY**2);
                     if (currentSpeed > maxSpeed) {
                         this.directionX = (this.directionX / currentSpeed) * maxSpeed;
                         this.directionY = (this.directionY / currentSpeed) * maxSpeed;
                     }
                 } else {
+                    // 恢復巡航速度
                     const currentSpeed = Math.sqrt(this.directionX**2 + this.directionY**2);
                     if (currentSpeed > this.speed * 1.5) {
-                         this.directionX *= 0.98;
-                         this.directionY *= 0.98;
+                         this.directionX *= 0.95; // 減速回正常
+                         this.directionY *= 0.95;
                     }
                 }
+
                 this.x += this.directionX;
                 this.y += this.directionY;
                 this.draw();
             }
         }
 
+        // 新增飛機的函數
+        function spawnJet() {
+            if (jetsArray.length >= 200) return; // 上限 200
+
+            let size = (Math.random() * 5) + 8; 
+            let x, y, directionX, directionY;
+            
+            // 隨機生成位置，但確保生成在台灣島外面
+            // 簡單作法：從四個角落隨機選一個生成
+            const spawnSide = Math.floor(Math.random() * 4);
+            switch(spawnSide) {
+                case 0: // Top
+                    x = Math.random() * canvas.width; y = -50; 
+                    directionY = Math.random() * 2 + 1; // 向下飛
+                    directionX = (Math.random() * 4) - 2;
+                    break;
+                case 1: // Right
+                    x = canvas.width + 50; y = Math.random() * canvas.height; 
+                    directionX = -(Math.random() * 2 + 1); // 向左飛
+                    directionY = (Math.random() * 4) - 2;
+                    break;
+                case 2: // Bottom
+                    x = Math.random() * canvas.width; y = canvas.height + 50; 
+                    directionY = -(Math.random() * 2 + 1); // 向上飛
+                    directionX = (Math.random() * 4) - 2;
+                    break;
+                case 3: // Left
+                    x = -50; y = Math.random() * canvas.height; 
+                    directionX = Math.random() * 2 + 1; // 向右飛
+                    directionY = (Math.random() * 4) - 2;
+                    break;
+            }
+
+            jetsArray.push(new Jet(x, y, directionX, directionY, size));
+        }
+
         function init() {
             jetsArray = [];
-            let numberOfJets = (canvas.height * canvas.width) / 15000;
-            
-            for (let i = 0; i < numberOfJets; i++) {
-                let size = (Math.random() * 5) + 8; 
-                let x = Math.random() * (innerWidth - size * 2) + size;
-                let y = Math.random() * (innerHeight - size * 2) + size;
-                let directionX = (Math.random() * 4) - 2;
-                let directionY = (Math.random() * 4) - 2;
-                jetsArray.push(new Jet(x, y, directionX, directionY, size));
+            updateTaiwanBounds();
+            // 初始生成 5 架
+            for (let i = 0; i < 5; i++) {
+                spawnJet();
             }
+            
+            // 設定定時器：每 3000 毫秒 (3秒) 增加一架
+            // 先清除舊的 interval 避免 resize 時重複執行
+            if (window.spawnInterval) clearInterval(window.spawnInterval);
+            window.spawnInterval = setInterval(spawnJet, 3000);
         }
 
         function animate() {
