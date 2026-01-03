@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台灣空防巡航動態背景</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            background: #001d3d; /* 深海軍藍背景 */
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        #canvas1 {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="canvas1"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas1');
+        const ctx = canvas.getContext('2d');
+        
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        let jetsArray;
+        let taiwanImage = new Image();
+        let t20Image = new Image();
+        
+        // 狀態標記
+        let isTaiwanLoaded = false;
+        let isT20Loaded = false;
+
+        // 設定圖片路徑
+        taiwanImage.src = 'Taiwan.jpg';
+        t20Image.src = 'T20.png';
+
+        // 圖片載入成功處理
+        taiwanImage.onload = () => { isTaiwanLoaded = true; };
+        t20Image.onload = () => { isT20Loaded = true; };
+
+        // 圖片載入失敗處理 (Fallback)
+        taiwanImage.onerror = () => { 
+            console.log("無法載入 Taiwan.jpg，切換至雷達線框模式");
+            isTaiwanLoaded = false; 
+        };
+        t20Image.onerror = () => { 
+            console.log("無法載入 T20.png，切換至幾何戰機模式");
+            isT20Loaded = false; 
+        };
+
+        // 滑鼠互動設定
+        let mouse = {
+            x: null,
+            y: null,
+            radius: 150
+        }
+
+        window.addEventListener('mousemove', function(event) {
+            mouse.x = event.x;
+            mouse.y = event.y;
+        });
+
+        window.addEventListener('resize', function() {
+            canvas.width = innerWidth;
+            canvas.height = innerHeight;
+            init(); // 重置畫面
+        });
+
+        window.addEventListener('mouseout', function() {
+            mouse.x = undefined;
+            mouse.y = undefined;
+        })
+
+        // 備用方案：如果圖片沒載入，畫線框地圖
+        const taiwanPoints = [
+            {x: 0.1, y: -0.45}, {x: 0.25, y: -0.3}, {x: 0.2, y: 0.1}, {x: 0.1, y: 0.4},
+            {x: 0.0, y: 0.5}, {x: -0.15, y: 0.2}, {x: -0.2, y: -0.1}, {x: -0.15, y: -0.35}
+        ];
+
+        function drawTaiwan() {
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+
+            ctx.save();
+            ctx.translate(cx, cy);
+
+            if (isTaiwanLoaded) {
+                // === 模式 A: 顯示圖片 ===
+                const scale = Math.min(canvas.width / taiwanImage.width, canvas.height / taiwanImage.height) * 0.7;
+                const imgWidth = taiwanImage.width * scale;
+                const imgHeight = taiwanImage.height * scale;
+                
+                ctx.globalAlpha = 0.5;
+                ctx.drawImage(taiwanImage, -imgWidth / 2, -imgHeight / 2, imgWidth, imgHeight);
+                ctx.globalAlpha = 1.0;
+            } else {
+                // === 模式 B: 顯示線框 (備用) ===
+                const scale = Math.min(canvas.width, canvas.height) * 0.8; 
+                ctx.beginPath();
+                if (taiwanPoints.length > 0) {
+                    ctx.moveTo(taiwanPoints[0].x * scale, taiwanPoints[0].y * scale);
+                    for (let i = 1; i < taiwanPoints.length; i++) {
+                        ctx.lineTo(taiwanPoints[i].x * scale, taiwanPoints[i].y * scale);
+                    }
+                }
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(0, 100, 0, 0.3)';
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 2;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#00ff00';
+                ctx.fill();
+                ctx.stroke();
+            }
+
+            // 中心掃描點 (兩種模式都有)
+            ctx.beginPath();
+            ctx.arc(0, 0, 5, 0, Math.PI*2);
+            ctx.fillStyle = '#00ff00';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00ff00';
+            ctx.fill(); 
+
+            ctx.restore();
+        }
+
+        class Jet {
+            constructor(x, y, directionX, directionY, size) {
+                this.x = x;
+                this.y = y;
+                this.directionX = directionX;
+                this.directionY = directionY;
+                // 如果是圖片模式，尺寸大一點；如果是幾何模式，尺寸小一點
+                this.baseSize = size; 
+                this.speed = Math.random() * 2 + 1;
+                this.angle = 0;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                this.angle = Math.atan2(this.directionY, this.directionX);
+
+                if (isT20Loaded) {
+                    // === 模式 A: 顯示 T20 圖片 ===
+                    let size = this.baseSize * 3;
+                    ctx.rotate(this.angle);
+                    ctx.drawImage(t20Image, -size / 2, -size / 2, size, size);
+                    
+                    // 噴射光
+                    ctx.beginPath();
+                    ctx.moveTo(-size / 2 + 5, 0);
+                    ctx.lineTo(-size / 2 - (Math.random() * 10 + 5), -size / 10);
+                    ctx.lineTo(-size / 2 - (Math.random() * 10 + 5), size / 10);
+                    ctx.fillStyle = 'rgba(0, 255, 255, 0.6)';
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = 'rgba(0, 255, 255, 0.6)';
+                    ctx.fill();
+
+                } else {
+                    // === 模式 B: 顯示幾何戰機 (備用) ===
+                    let size = this.baseSize;
+                    ctx.rotate(this.angle + Math.PI / 2); // 三角形需要轉 90 度
+                    ctx.beginPath();
+                    ctx.moveTo(0, -size * 1.5);
+                    ctx.lineTo(size, size);
+                    ctx.lineTo(0, size * 0.7);
+                    ctx.lineTo(-size, size);
+                    ctx.closePath();
+                    ctx.fillStyle = '#e0e0e0';
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = '#e0e0e0';
+                    ctx.fill();
+
+                    // 噴射光
+                    ctx.beginPath();
+                    ctx.moveTo(-size/2, size);
+                    ctx.lineTo(0, size * 2 + (Math.random()*5));
+                    ctx.lineTo(size/2, size);
+                    ctx.fillStyle = 'rgba(0, 255, 255, 0.6)';
+                    ctx.fill();
+                }
+
+                ctx.restore();
+            }
+
+            update() {
+                if (this.x > canvas.width + 50 || this.x < -50) this.directionX = -this.directionX;
+                if (this.y > canvas.height + 50 || this.y < -50) this.directionY = -this.directionY;
+
+                let dx = mouse.x - this.x;
+                let dy = mouse.y - this.y;
+                let distance = Math.sqrt(dx*dx + dy*dy);
+                
+                if (mouse.x !== undefined && distance < mouse.radius * 2) {
+                    const forceDirectionX = dx / distance;
+                    const forceDirectionY = dy / distance;
+                    const maxSpeed = 5;
+                    this.directionX += forceDirectionX * 0.1;
+                    this.directionY += forceDirectionY * 0.1;
+                    const currentSpeed = Math.sqrt(this.directionX**2 + this.directionY**2);
+                    if (currentSpeed > maxSpeed) {
+                        this.directionX = (this.directionX / currentSpeed) * maxSpeed;
+                        this.directionY = (this.directionY / currentSpeed) * maxSpeed;
+                    }
+                } else {
+                    const currentSpeed = Math.sqrt(this.directionX**2 + this.directionY**2);
+                    if (currentSpeed > this.speed * 1.5) {
+                         this.directionX *= 0.98;
+                         this.directionY *= 0.98;
+                    }
+                }
+                this.x += this.directionX;
+                this.y += this.directionY;
+                this.draw();
+            }
+        }
+
+        function init() {
+            jetsArray = [];
+            let numberOfJets = (canvas.height * canvas.width) / 15000;
+            
+            for (let i = 0; i < numberOfJets; i++) {
+                let size = (Math.random() * 5) + 8; 
+                let x = Math.random() * (innerWidth - size * 2) + size;
+                let y = Math.random() * (innerHeight - size * 2) + size;
+                let directionX = (Math.random() * 4) - 2;
+                let directionY = (Math.random() * 4) - 2;
+                jetsArray.push(new Jet(x, y, directionX, directionY, size));
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            ctx.clearRect(0, 0, innerWidth, innerHeight);
+            drawTaiwan();
+            for (let i = 0; i < jetsArray.length; i++) {
+                jetsArray[i].update();
+            }
+        }
+
+        // 啟動
+        init();
+        animate();
+
+    </script>
+</body>
+</html>
